@@ -65,6 +65,7 @@ const DualModeVoiceAssistant = () => {
   const currentAudioRef = useRef(null); // Track current playing audio for interruption
   const audioInterruptedRef = useRef(false); // Track if audio was manually interrupted
   const aiRequestIdRef = useRef(0); // Track active AI request for cancellation
+  const lastTranscriptRef = useRef(''); // Prevent duplicate transcripts
   const messagesEndRef = useRef(null);
   const { isListening, startListening, stopListening } = useSpeechRecognition();
 
@@ -257,7 +258,12 @@ const DualModeVoiceAssistant = () => {
     
     // Process transcripts normally (only final results, not interim)
     if (cleanTranscript && cleanTranscript.trim() && !isPaused && activeState && !isInterimResult && !isProcessing) {
+      if (cleanTranscript === lastTranscriptRef.current) {
+        console.log('Duplicate transcript ignored');
+        return;
+      }
       console.log('Processing transcript:', cleanTranscript);
+      lastTranscriptRef.current = cleanTranscript;
       const entry = {
         id: Date.now(),
         role: modeState === 'ai-partner' ? 'user' : currentSpeaker,
@@ -369,6 +375,7 @@ const DualModeVoiceAssistant = () => {
     setLiveNotes([]);
     setSessionTime(0);
     setBookmarkedMessages(new Set());
+    lastTranscriptRef.current = '';
     
     // Always restart speech recognition
     try {
@@ -650,6 +657,7 @@ const DualModeVoiceAssistant = () => {
     sessionStartedRef.current = false;
     isActiveRef.current = false;
     setIsActive(false);
+    lastTranscriptRef.current = '';
     await stopListening();
     toast.promise(
       generateFinalSummary(),
@@ -724,6 +732,7 @@ const DualModeVoiceAssistant = () => {
     isActiveRef.current = false;
     sessionIdRef.current = null;
     conversationRef.current = [];
+    lastTranscriptRef.current = '';
     setMode(null); setIsActive(false); setConversation([]); setLiveNotes([]); setSessionTime(0); setFinalSummary(null); setSessionId(null);
   };
   
