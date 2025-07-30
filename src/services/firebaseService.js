@@ -1,5 +1,5 @@
 import { db } from '../firebase/config';
-import { collection, addDoc, doc, setDoc, updateDoc } from 'firebase/firestore';
+import { collection, addDoc, doc, updateDoc } from 'firebase/firestore';
 
 // Create a new session document in Firestore
 export const createSessionInFirestore = async (mode) => {
