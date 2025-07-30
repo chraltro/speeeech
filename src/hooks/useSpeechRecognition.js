@@ -9,6 +9,7 @@ const useSpeechRecognition = () => {
   const onTranscriptCallback = useRef(null);
   const isListeningRef = useRef(false);
   const lastInterimRef = useRef('');
+  const lastFinalTranscriptRef = useRef('');
   const interimTimeoutRef = useRef(null);
 
   const startListening = useCallback(async (onTranscript) => {
@@ -32,6 +33,7 @@ const useSpeechRecognition = () => {
     const recognition = new SpeechRecognition();
     recognitionRef.current = recognition;
     onTranscriptCallback.current = onTranscript;
+    lastFinalTranscriptRef.current = '';
 
     // Configure recognition
     recognition.continuous = true;
@@ -110,8 +112,11 @@ const useSpeechRecognition = () => {
             const lastInterim = lastInterimRef.current;
             if (lastInterim && lastInterim.trim().length > 0 && onTranscriptCallback.current) {
               console.log('⏰ Processing interim as final (timeout):', lastInterim);
-              setTranscript(lastInterim);
-              onTranscriptCallback.current(lastInterim);
+              if (lastInterim !== lastFinalTranscriptRef.current) {
+                setTranscript(lastInterim);
+                onTranscriptCallback.current(lastInterim);
+                lastFinalTranscriptRef.current = lastInterim;
+              }
               lastInterimRef.current = '';
             }
           }, 1500); // Wait 1.5 seconds for final result
@@ -119,14 +124,19 @@ const useSpeechRecognition = () => {
       }
 
       setInterimTranscript(interimTranscript);
-      
+
       // Process final transcripts immediately
       if (finalTranscript && finalTranscript.trim().length > 0) {
         console.log('✅ Final transcript:', finalTranscript);
-        setTranscript(finalTranscript);
         lastInterimRef.current = ''; // Clear interim
-        if (onTranscriptCallback.current) {
-          onTranscriptCallback.current(finalTranscript);
+        if (finalTranscript !== lastFinalTranscriptRef.current) {
+          setTranscript(finalTranscript);
+          lastFinalTranscriptRef.current = finalTranscript;
+          if (onTranscriptCallback.current) {
+            onTranscriptCallback.current(finalTranscript);
+          }
+        } else {
+          console.log('Duplicate final transcript ignored');
         }
       }
     };
@@ -255,6 +265,7 @@ const useSpeechRecognition = () => {
     }
     setInterimTranscript('');
     lastInterimRef.current = '';
+    lastFinalTranscriptRef.current = '';
     onTranscriptCallback.current = null;
   }, []);
 
