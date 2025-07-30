@@ -20,6 +20,7 @@ const DualModeVoiceAssistant = () => {
   const modeRef = useRef(null);
   const isActiveRef = useRef(false);
   const sessionIdRef = useRef(null);
+  const isPausedRef = useRef(false);
   
   const [isPaused, setIsPaused] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
@@ -32,6 +33,11 @@ const DualModeVoiceAssistant = () => {
       console.log('Initial state or reset detected');
     }
   }, [mode, isActive, sessionId]);
+
+  // Keep ref in sync with pause state
+  useEffect(() => {
+    isPausedRef.current = isPaused;
+  }, [isPaused]);
   
   // --- CONTENT STATE ---
   const [conversation, setConversation] = useState([]);
@@ -226,7 +232,7 @@ const DualModeVoiceAssistant = () => {
   const handleTranscription = async (transcript) => {
     console.log('handleTranscription called with:', transcript);
     console.log('Current state - isPaused:', isPaused, 'isActive:', isActive, 'mode:', mode, 'isSpeaking:', isSpeaking);
-    console.log('Ref state - isActiveRef:', isActiveRef.current, 'modeRef:', modeRef.current, 'sessionIdRef:', sessionIdRef.current);
+    console.log('Ref state - isActiveRef:', isActiveRef.current, 'modeRef:', modeRef.current, 'sessionIdRef:', sessionIdRef.current, 'isPausedRef:', isPausedRef.current);
     
     // Check if this is an interim result for interruption
     const isInterimResult = transcript && transcript.includes('[INTERIM]');
@@ -248,6 +254,7 @@ const DualModeVoiceAssistant = () => {
     const activeState = isActiveRef.current || isActive;
     const modeState = modeRef.current || mode;
     const sessionState = sessionIdRef.current || sessionId;
+    const pausedState = isPausedRef.current || isPaused;
     
     // Process transcripts normally (only final results, not interim)
     if (cleanTranscript && cleanTranscript.trim() && !isPaused && activeState && !isInterimResult && !isProcessing) {
@@ -698,6 +705,7 @@ const DualModeVoiceAssistant = () => {
   const pauseSession = async () => {
     const newPausedState = !isPaused;
     setIsPaused(newPausedState);
+    isPausedRef.current = newPausedState;
     if (newPausedState) {
       await stopListening();
       toast("Session paused.");
