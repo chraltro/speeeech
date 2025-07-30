@@ -50,7 +50,7 @@ const DualModeVoiceAssistant = () => {
   // --- UI STATE ---
   const [showSettings, setShowSettings] = useState(false);
   const [volume, setVolume] = useState(70);
-  const [noteFrequency, setNoteFrequency] = useState(30);
+  const [noteFrequency, setNoteFrequency] = useState(15);
   const [preferredVoice, setPreferredVoice] = useState('aria');
   const [finalSummary, setFinalSummary] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -64,6 +64,7 @@ const DualModeVoiceAssistant = () => {
   const noteTimerRef = useRef(null);
   const currentAudioRef = useRef(null); // Track current playing audio for interruption
   const audioInterruptedRef = useRef(false); // Track if audio was manually interrupted
+  const aiRequestIdRef = useRef(0); // Track active AI request for cancellation
   const messagesEndRef = useRef(null);
   const { isListening, startListening, stopListening } = useSpeechRecognition();
 
@@ -147,11 +148,11 @@ const DualModeVoiceAssistant = () => {
 
   // Generate live notes from conversation
   const generateLiveNotes = useCallback(async () => {
-    const recentContent = conversation.slice(-5).map(m => `${m.role || m.speaker}: ${m.content}`).join('\n');
-    if (!recentContent || recentContent.length < 50) return;
+    const recentContent = conversation.slice(-8).map(m => `${m.role || m.speaker}: ${m.content}`).join('\n');
+    if (!recentContent || recentContent.length < 20) return;
     
     try {
-      const prompt = `Extract 1-2 key bullet points from this conversation segment. Be extremely concise. Segment:\n\n${recentContent}\n\nReturn as a JSON array of strings: ["point 1", "point 2"]`;
+      const prompt = `Extract 2-3 key bullet points from this conversation segment. Be extremely concise. Segment:\n\n${recentContent}\n\nReturn as a JSON array of strings`;
       const response = await getGeminiTextResponse(prompt);
       
       try {
@@ -212,8 +213,10 @@ const DualModeVoiceAssistant = () => {
       console.log('⚠️ No browser TTS to stop');
     }
     
+    aiRequestIdRef.current += 1; // invalidate any pending AI responses
     setIsSpeaking(false);
-    console.log('✅ setIsSpeaking(false) called - NO FALLBACK TTS - microphone should remain active');
+    setIsProcessing(false);
+    console.log('✅ Audio stopped and flags reset - microphone should remain active');
     
     // Ensure microphone stays active
     if (!isListening) {
@@ -253,7 +256,7 @@ const DualModeVoiceAssistant = () => {
     const pausedState = isPausedRef.current || isPaused;
     
     // Process transcripts normally (only final results, not interim)
-    if (cleanTranscript && cleanTranscript.trim() && !pausedState && activeState && !isInterimResult) {
+    if (cleanTranscript && cleanTranscript.trim() && !isPaused && activeState && !isInterimResult && !isProcessing) {
       console.log('Processing transcript:', cleanTranscript);
       const entry = {
         id: Date.now(),
@@ -454,6 +457,7 @@ const DualModeVoiceAssistant = () => {
 
   const handleAIConversation = async (userInput) => {
     console.log('handleAIConversation started with input:', userInput);
+    const requestId = ++aiRequestIdRef.current;
     setIsProcessing(true);
     
     let retryCount = 0;
@@ -468,6 +472,11 @@ const DualModeVoiceAssistant = () => {
         
         const response = await getGeminiTextResponse(prompt);
         console.log('Got AI response:', response);
+        if (requestId !== aiRequestIdRef.current) {
+          console.log('AI response aborted - newer request in progress');
+          setIsProcessing(false);
+          return;
+        }
         
         const currentSessionId = sessionIdRef.current || sessionId;
         console.log('Using sessionId for AI message:', currentSessionId);
@@ -484,6 +493,11 @@ const DualModeVoiceAssistant = () => {
         
         console.log('Starting TTS for response:', response);
         await speakResponse(response);
+        if (requestId !== aiRequestIdRef.current) {
+          console.log('AI speech aborted - newer request in progress');
+          setIsProcessing(false);
+          return;
+        }
         console.log('TTS completed');
         break; // Success, exit retry loop
         
