@@ -4,9 +4,10 @@ import toast from 'react-hot-toast';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { createSessionInFirestore, addTranscriptChunk, saveSummaryToFirestore, confirmSummaryInFirestore } from '../services/firebaseService';
-import { getGeminiTextResponse, getGeminiTTSResponse } from '../services/geminiService';
-import { getFallbackTTS } from '../services/freeTTSService';
-import useSpeechRecognition from '../hooks/useSpeechRecognition';
+import { getGeminiTextResponse } from '../services/geminiService';
+import { speakText, TTS_VOICES } from '../services/openaiService';
+import { checkAdvancedDiarizationAvailability } from '../services/advancedWhisperDiarizationService';
+import useWhisperRecognition from '../hooks/useWhisperRecognition';
 
 const DualModeVoiceAssistant = () => {
   // --- STATE MANAGEMENT ---
@@ -51,12 +52,13 @@ const DualModeVoiceAssistant = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [volume, setVolume] = useState(70);
   const [noteFrequency, setNoteFrequency] = useState(15);
-  const [preferredVoice, setPreferredVoice] = useState('aria');
+  const [preferredVoice, setPreferredVoice] = useState('alloy');
   const [finalSummary, setFinalSummary] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [showSearch, setShowSearch] = useState(false);
   const [bookmarkedMessages, setBookmarkedMessages] = useState(new Set());
   const [showKeyboardHelp, setShowKeyboardHelp] = useState(false);
+  const [advancedDiarizationAvailable, setAdvancedDiarizationAvailable] = useState(null);
   
   // --- REFS ---
   const synthesisRef = useRef(null);
@@ -67,13 +69,32 @@ const DualModeVoiceAssistant = () => {
   const aiRequestIdRef = useRef(0); // Track active AI request for cancellation
   const lastTranscriptRef = useRef(''); // Prevent duplicate transcripts
   const messagesEndRef = useRef(null);
-  const { isListening, startListening, stopListening } = useSpeechRecognition();
+  const { isListening, startListening, stopListening } = useWhisperRecognition();
 
   // --- EFFECTS ---
 
-  // Initialize speech synthesis on component mount
+  // Initialize speech synthesis and check diarization availability on component mount
   useEffect(() => {
     synthesisRef.current = window.speechSynthesis;
+    
+    // Check if advanced diarization backend is available
+    const checkDiarization = async () => {
+      try {
+        const available = await checkAdvancedDiarizationAvailability();
+        setAdvancedDiarizationAvailable(available);
+        if (available) {
+          console.log('✅ Advanced speaker diarization available!');
+        } else {
+          console.log('⚠️ Advanced diarization backend not available - using fallback methods');
+        }
+      } catch (error) {
+        console.warn('Could not check diarization availability:', error);
+        setAdvancedDiarizationAvailable(false);
+      }
+    };
+    
+    checkDiarization();
+    
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
       if (noteTimerRef.current) clearInterval(noteTimerRef.current);
@@ -558,77 +579,26 @@ const DualModeVoiceAssistant = () => {
       .trim();
     
     try {
-      // Use Gemini TTS for high-quality speech
-      const audioResponse = await getGeminiTTSResponse(cleanText, "Kore");
-      
-      // Use the converted WAV blob directly
-      const audioUrl = URL.createObjectURL(audioResponse.blob);
-      const audio = new Audio(audioUrl);
-      currentAudioRef.current = audio; // Track for interruption
-      
-      audio.volume = volume / 100;
-      
-      return new Promise((resolve) => {
-        audio.onended = () => {
-          setIsSpeaking(false);
-          currentAudioRef.current = null;
-          URL.revokeObjectURL(audioUrl);
-          // Don't restart - microphone should stay on
-          resolve();
-        };
-        audio.onerror = (e) => {
-          console.error("Audio playback failed, falling back to browser TTS:", e);
-          URL.revokeObjectURL(audioUrl);
-          currentAudioRef.current = null;
-          // Fallback to browser TTS with better voice
-          if (synthesisRef.current) {
-            const voices = synthesisRef.current.getVoices();
-            const utterance = new SpeechSynthesisUtterance(cleanText);
-            const preferredVoice = voices.find(voice => 
-              voice.name.includes('Google') || voice.name.includes('Microsoft') || voice.name.includes('Apple')
-            ) || voices.find(voice => voice.lang.startsWith('en')) || voices[0];
-            if (preferredVoice) utterance.voice = preferredVoice;
-            utterance.volume = volume / 100;
-            utterance.rate = 0.9;
-            utterance.onend = () => { 
-              setIsSpeaking(false); 
-              // Don't restart - microphone should stay on
-              resolve(); 
-            };
-            synthesisRef.current.speak(utterance);
-          } else {
-            setIsSpeaking(false);
-            resolve();
-          }
-        };
-        audio.play().catch((playError) => {
-          console.error("Audio play failed:", playError);
-          URL.revokeObjectURL(audioUrl);
-          currentAudioRef.current = null;
-          // Fallback to browser TTS with better voice
-          if (synthesisRef.current) {
-            const voices = synthesisRef.current.getVoices();
-            const utterance = new SpeechSynthesisUtterance(cleanText);
-            const preferredVoice = voices.find(voice => 
-              voice.name.includes('Google') || voice.name.includes('Microsoft') || voice.name.includes('Apple')
-            ) || voices.find(voice => voice.lang.startsWith('en')) || voices[0];
-            if (preferredVoice) utterance.voice = preferredVoice;
-            utterance.volume = volume / 100;
-            utterance.rate = 0.9;
-            utterance.onend = () => { 
-              setIsSpeaking(false); 
-              // Don't restart - microphone should stay on
-              resolve(); 
-            };
-            synthesisRef.current.speak(utterance);
-          } else {
-            setIsSpeaking(false);
-            resolve();
-          }
-        });
+      // Use OpenAI TTS for high-quality speech
+      await speakText(cleanText, {
+        voice: preferredVoice,
+        model: 'tts-1',
+        speed: 1.0,
+        volume: volume / 100,
+        currentAudioRef: currentAudioRef
       });
+      
+      // Check if audio was manually interrupted
+      if (audioInterruptedRef.current) {
+        console.log('🛑 Audio was manually interrupted');
+        return;
+      }
+      
+      setIsSpeaking(false);
+      currentAudioRef.current = null;
+      
     } catch (error) {
-      console.error("Gemini TTS failed, trying enhanced fallback TTS:", error);
+      console.error("OpenAI TTS failed, falling back to browser TTS:", error);
       
       // Check if audio was manually interrupted - if so, don't fallback
       if (audioInterruptedRef.current) {
@@ -639,11 +609,34 @@ const DualModeVoiceAssistant = () => {
       }
       
       try {
-        // Use comprehensive fallback TTS chain with preferred voice and audio ref
-        await getFallbackTTS(cleanText, volume / 100, preferredVoice, currentAudioRef);
-        setIsSpeaking(false);
-        currentAudioRef.current = null;
-        // Don't restart - microphone should stay on
+        // Fallback to browser TTS
+        if (synthesisRef.current) {
+          const voices = synthesisRef.current.getVoices();
+          const utterance = new SpeechSynthesisUtterance(cleanText);
+          const fallbackVoice = voices.find(voice => 
+            voice.name.includes('Google') || voice.name.includes('Microsoft') || voice.name.includes('Apple')
+          ) || voices.find(voice => voice.lang.startsWith('en')) || voices[0];
+          if (fallbackVoice) utterance.voice = fallbackVoice;
+          utterance.volume = volume / 100;
+          utterance.rate = 0.9;
+          
+          return new Promise((resolve) => {
+            utterance.onend = () => { 
+              setIsSpeaking(false); 
+              currentAudioRef.current = null;
+              resolve(); 
+            };
+            utterance.onerror = () => {
+              setIsSpeaking(false);
+              currentAudioRef.current = null;
+              resolve();
+            };
+            synthesisRef.current.speak(utterance);
+          });
+        } else {
+          setIsSpeaking(false);
+          currentAudioRef.current = null;
+        }
       } catch (fallbackError) {
         console.error("All TTS methods failed:", fallbackError);
         setIsSpeaking(false);
@@ -877,14 +870,12 @@ const DualModeVoiceAssistant = () => {
               onChange={(e) => setPreferredVoice(e.target.value)} 
               className="w-full bg-gray-800/50 border border-gray-700/50 rounded-2xl px-4 py-4 text-white font-light focus:border-emerald-500/50 focus:outline-none transition-colors"
             >
-              <option value="aria">Aria</option>
-              <option value="jenny">Jenny</option>
-              <option value="guy">Guy</option>
-              <option value="davis">Davis</option>
-              <option value="jane">Jane</option>
-              <option value="jason">Jason</option>
-              <option value="sara">Sara</option>
-              <option value="nancy">Nancy</option>
+              <option value="alloy">Alloy (Neutral)</option>
+              <option value="echo">Echo (Male)</option>
+              <option value="fable">Fable (British Male)</option>
+              <option value="onyx">Onyx (Deep Male)</option>
+              <option value="nova">Nova (Female)</option>
+              <option value="shimmer">Shimmer (Soft Female)</option>
             </select>
           </div>
         </div>
@@ -1006,6 +997,18 @@ const DualModeVoiceAssistant = () => {
                   <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />
                   <span className="font-mono text-sm text-emerald-400">{formatTime(sessionTime)}</span>
                 </div>
+                {advancedDiarizationAvailable === true && (
+                  <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-purple-500/10 border border-purple-500/20" title="Advanced Speaker Diarization Active">
+                    <div className="w-2 h-2 bg-purple-400 rounded-full animate-pulse" />
+                    <span className="font-mono text-xs text-purple-400">AI DIARIZATION</span>
+                  </div>
+                )}
+                {advancedDiarizationAvailable === false && (
+                  <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/20" title="Using fallback diarization methods">
+                    <div className="w-2 h-2 bg-amber-400 rounded-full" />
+                    <span className="font-mono text-xs text-amber-400">FALLBACK</span>
+                  </div>
+                )}
               </div>
               
               <div className="flex items-center gap-3">
